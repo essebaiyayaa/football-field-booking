@@ -1,0 +1,21 @@
+# Fichiers 
+.env
+
+
+# Dependencies
+/vendor/
+
+# Logs
+*.log
+logs/
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Cache
+/tmp/
+/cache/
+
+# Uploads
+/uploads/

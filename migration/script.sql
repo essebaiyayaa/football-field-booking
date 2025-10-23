@@ -11,8 +11,15 @@ CREATE TABLE Utilisateur (
     email VARCHAR(100) UNIQUE NOT NULL,
     telephone VARCHAR(20),
     mot_de_passe VARCHAR(255) NOT NULL,
-    role ENUM('client', 'admin', 'gerant_terrain') DEFAULT 'client'
-);
+    role ENUM('client', 'admin', 'gerant_terrain') DEFAULT 'client',
+    verification_token VARCHAR(64) NULL,
+    email_verified TINYINT(1) DEFAULT 0,
+    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    date_derniere_connexion TIMESTAMP NULL,
+    INDEX idx_email (email),
+    INDEX idx_verification_token (verification_token),
+    INDEX idx_email_verified (email_verified)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE Terrain (
     id_terrain INT PRIMARY KEY AUTO_INCREMENT,
