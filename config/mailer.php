@@ -1,10 +1,6 @@
 <?php
-
 require_once __DIR__ . '/config.php';
-
-// Autoload 
 require_once __DIR__ . '/../vendor/autoload.php';
-
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
@@ -18,38 +14,55 @@ class Mailer {
         $this->configure();
     }
     
-private function configure() {
-    try {
-      
-        $this->mail->isSMTP();
-        $this->mail->Host = env('SMTP_HOST', 'smtp.gmail.com');
-        $this->mail->SMTPAuth = filter_var(env('SMTP_AUTH', true), FILTER_VALIDATE_BOOLEAN);
-        $this->mail->Username = env('SMTP_USERNAME');
-        $this->mail->Password = env('SMTP_PASSWORD');
-        $this->mail->SMTPSecure = env('SMTP_ENCRYPTION', 'tls');
-        $this->mail->Port = env('SMTP_PORT', 587);
-        
-        
-        $this->mail->CharSet = 'UTF-8';
-        $this->mail->Encoding = 'base64';
-        
-       
-        $this->mail->setFrom(env('MAIL_FROM'), env('MAIL_FROM_NAME', SITE_NAME));
-        $this->mail->addReplyTo(env('MAIL_FROM'), env('MAIL_FROM_NAME', SITE_NAME));
-        
-      
-        $this->mail->SMTPDebug = 0;
-        $this->mail->Debugoutput = 'error_log';
-        
-    } catch (Exception $e) {
-        error_log("Erreur configuration PHPMailer: " . $e->getMessage());
-        throw $e; 
+    private function configure() {
+        try {
+            $this->mail->isSMTP();
+            $this->mail->Host = env('SMTP_HOST', 'smtp.gmail.com');
+            $this->mail->SMTPAuth = filter_var(env('SMTP_AUTH', true), FILTER_VALIDATE_BOOLEAN);
+            $this->mail->Username = env('SMTP_USERNAME');
+            $this->mail->Password = env('SMTP_PASSWORD');
+            $this->mail->SMTPSecure = env('SMTP_ENCRYPTION', 'tls');
+            $this->mail->Port = env('SMTP_PORT', 587);
+            
+            $this->mail->CharSet = 'UTF-8';
+            $this->mail->Encoding = 'base64';
+            
+            $this->mail->setFrom(env('MAIL_FROM'), env('MAIL_FROM_NAME', SITE_NAME));
+            $this->mail->addReplyTo(env('MAIL_FROM'), env('MAIL_FROM_NAME', SITE_NAME));
+            
+            $this->mail->SMTPDebug = 0;
+            $this->mail->Debugoutput = 'error_log';
+            
+        } catch (Exception $e) {
+            error_log("Erreur configuration PHPMailer: " . $e->getMessage());
+            throw $e;
+        }
     }
-}
+    
+    /**
+     * Méthode générique pour envoyer n'importe quel email
+     */
+    public function sendEmail($to, $toName, $subject, $htmlBody, $textBody = '') {
+        try {
+            $this->mail->clearAddresses();
+            $this->mail->addAddress($to, $toName);
+            
+            $this->mail->isHTML(true);
+            $this->mail->Subject = $subject;
+            $this->mail->Body = $htmlBody;
+            $this->mail->AltBody = $textBody ?: strip_tags($htmlBody);
+            
+            $this->mail->send();
+            return true;
+            
+        } catch (Exception $e) {
+            error_log("Erreur PHPMailer: " . $this->mail->ErrorInfo);
+            return false;
+        }
+    }
     
     public function sendVerificationEmail($to, $name, $verification_link) {
         try {
-           
             $this->mail->clearAddresses();
             $this->mail->addAddress($to, $name);
             
@@ -57,7 +70,6 @@ private function configure() {
             $this->mail->Subject = "Vérification de votre compte " . SITE_NAME;
             $this->mail->Body = $this->getVerificationEmailTemplate($name, $verification_link);
             $this->mail->AltBody = $this->getVerificationTextTemplate($name, $verification_link);
-            
             
             $this->mail->send();
             return true;
@@ -70,7 +82,6 @@ private function configure() {
     
     public function sendWelcomeEmail($to, $name) {
         try {
-           
             $this->mail->clearAddresses();
             $this->mail->addAddress($to, $name);
             
@@ -79,7 +90,6 @@ private function configure() {
             $this->mail->Body = $this->getWelcomeEmailTemplate($name);
             $this->mail->AltBody = $this->getWelcomeTextTemplate($name);
             
-          
             $this->mail->send();
             return true;
             
@@ -279,11 +289,6 @@ private function configure() {
                     padding: 10px 0;
                     display: flex;
                     align-items: center;
-                }
-                .feature-item i {
-                    color: #16a34a;
-                    margin-right: 10px;
-                    font-weight: bold;
                 }
             </style>
         </head>
