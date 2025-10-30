@@ -9,7 +9,7 @@ $errors = [];
 if (isset($_SESSION['user_id'])) {
     switch ($_SESSION['role']) {
         case 'admin':
-            header('Location: home.php');
+            header('Location: admin_dashboard.php');
             exit;
         case 'gerant_terrain':
             header('Location: dashboard_gerant.php');
