@@ -43,43 +43,109 @@ try {
     $tailles = [];
 }
 
-// Traitement de la réservation
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_reservation'])) {
-    $id_terrain = $_POST['id_terrain'];
+// traitement
+
+// Traitement de la réservation (à remplacer dans vos fichiers)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $date_reservation = $_POST['date_reservation'];
     $heure_debut = $_POST['heure_debut'];
-    $heure_fin = date('H:i:s', strtotime($heure_debut) + 3600);
+    $heure_fin = date('H:i:s', strtotime($heure_debut) + 3600); 
+    $id_terrain = $_POST['id_terrain'] ?? $_GET['id'];
     $options_selectionnees = $_POST['options'] ?? [];
     $commentaires = $_POST['commentaires'] ?? '';
     
     try {
         $pdo->beginTransaction();
         
-        // Insertion de la réservation
+        // ÉTAPE 1 : VÉRIFIER SI LE CRÉNEAU EST DÉJÀ RÉSERVÉ
         $stmt = $pdo->prepare("
-            INSERT INTO Reservation (date_reservation, heure_debut, heure_fin, id_utilisateur, id_terrain, commentaires, statut)
-            VALUES (?, ?, ?, ?, ?, ?, 'Confirmée')
+            SELECT id_reservation 
+            FROM Reservation 
+            WHERE id_terrain = ? 
+            AND date_reservation = ? 
+            AND heure_debut = ?
+            AND statut != 'Annulée'
+            FOR UPDATE
         ");
-        $stmt->execute([$date_reservation, $heure_debut, $heure_fin, $_SESSION['user_id'], $id_terrain, $commentaires]);
-        $id_reservation = $pdo->lastInsertId();
+        $stmt->execute([$id_terrain, $date_reservation, $heure_debut]);
         
-        // Insertion des options
-        if (!empty($options_selectionnees)) {
-            $stmt = $pdo->prepare("INSERT INTO Reservation_Option (id_reservation, id_option) VALUES (?, ?)");
-            foreach ($options_selectionnees as $id_option) {
-                $stmt->execute([$id_reservation, $id_option]);
+        if ($stmt->fetch()) {
+            $pdo->rollBack();
+            $error = "Désolé, ce créneau vient d'être réservé par un autre utilisateur. Veuillez en choisir un autre.";
+        } else {
+            // ÉTAPE 2 : RÉCUPÉRER LE PRIX DU TERRAIN
+            $stmt = $pdo->prepare("SELECT prix_heure FROM Terrain WHERE id_terrain = ?");
+            $stmt->execute([$id_terrain]);
+            $terrain = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$terrain) {
+                throw new Exception("Terrain introuvable");
             }
+            
+            $prix_terrain = $terrain['prix_heure'];
+            
+            // ÉTAPE 3 : CALCULER LE PRIX DES OPTIONS
+            $prix_options = 0;
+            if (!empty($options_selectionnees)) {
+                $placeholders = str_repeat('?,', count($options_selectionnees) - 1) . '?';
+                $stmt = $pdo->prepare("SELECT SUM(prix) as total FROM OptionSupplementaire WHERE id_option IN ($placeholders)");
+                $stmt->execute($options_selectionnees);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                $prix_options = $result['total'] ?? 0;
+            }
+            
+            // ÉTAPE 4 : CALCULER LE PRIX TOTAL
+            $prix_total = $prix_terrain + $prix_options;
+            
+            // ÉTAPE 5 : INSÉRER LA RÉSERVATION
+            $stmt = $pdo->prepare("
+                INSERT INTO Reservation (
+                    date_reservation, 
+                    heure_debut, 
+                    heure_fin, 
+                    id_utilisateur, 
+                    id_terrain, 
+                    commentaires, 
+                    statut,
+                    prix_total,
+                    statut_paiement
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'Confirmée', ?, 'en_attente')
+            ");
+            
+            $stmt->execute([
+                $date_reservation, 
+                $heure_debut, 
+                $heure_fin, 
+                $_SESSION['user_id'], 
+                $id_terrain, 
+                $commentaires,
+                $prix_total
+            ]);
+            
+            $id_reservation = $pdo->lastInsertId();
+            
+            // ÉTAPE 6 : INSÉRER LES OPTIONS
+            if (!empty($options_selectionnees)) {
+                $stmt = $pdo->prepare("INSERT INTO Reservation_Option (id_reservation, id_option) VALUES (?, ?)");
+                foreach ($options_selectionnees as $id_option) {
+                    $stmt->execute([$id_reservation, $id_option]);
+                }
+            }
+            
+            $pdo->commit();
+            
+            // ÉTAPE 7 : REDIRECTION VERS LA FACTURE
+            header("Location: facture.php?id=" . $id_reservation);
+            exit;
         }
-        
-        $pdo->commit();
-        
-        // Redirection vers la facture
-        header("Location: facture.php?id=" . $id_reservation);
-        exit;
         
     } catch (PDOException $e) {
         $pdo->rollBack();
         $error = "Erreur lors de la réservation: " . $e->getMessage();
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        $error = $e->getMessage();
     }
 }
 ?>
@@ -745,6 +811,322 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_reservation'])
     </div>
 
     <script>
+        // Variables globales pour le polling
+let pollingInterval = null;
+let currentDate = null;
+let currentTerrainId = null;
+let lastBookedSlots = [];
+
+// Démarrer le polling automatique
+function startSlotsPolling(terrainId, date) {
+    // Arrêter le polling précédent s'il existe
+    stopSlotsPolling();
+    
+    currentDate = date;
+    currentTerrainId = terrainId;
+    
+    // Charger immédiatement les créneaux
+    loadAvailableSlots(terrainId, date);
+    
+    // Puis vérifier toutes les 5 secondes
+    pollingInterval = setInterval(() => {
+        checkSlotsAvailability(terrainId, date);
+    }, 5000); // 5000ms = 5 secondes
+}
+
+// Arrêter le polling
+function stopSlotsPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
+
+// Vérifier la disponibilité sans recharger l'interface
+function checkSlotsAvailability(terrainId, date) {
+    fetch(`get_available_slots.php?terrain_id=${terrainId}&date=${date}`)
+        .then(response => {
+            if (!response.ok) throw new Error('Erreur réseau');
+            return response.json();
+        })
+        .then(data => {
+            if (data.success && data.booked_slots) {
+                // Vérifier s'il y a des changements
+                const hasChanges = checkForChanges(data.booked_slots);
+                
+                if (hasChanges) {
+                    // Mettre à jour l'affichage silencieusement
+                    updateTimeSlotsDisplay(data.booked_slots);
+                    lastBookedSlots = [...data.booked_slots];
+                    
+                    // Vérifier si le créneau sélectionné est toujours disponible
+                    if (selectedTimeSlot) {
+                        const selectedValue = selectedTimeSlot.value;
+                        if (data.booked_slots.includes(selectedValue)) {
+                            // Le créneau sélectionné a été réservé par quelqu'un d'autre
+                            showSlotUnavailableWarning();
+                            selectedTimeSlot = null;
+                            updateSubmitButton();
+                        }
+                    }
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Erreur lors de la vérification:', error);
+            // Ne pas arrêter le polling en cas d'erreur réseau temporaire
+        });
+}
+
+// Vérifier s'il y a des changements dans les créneaux réservés
+function checkForChanges(newBookedSlots) {
+    if (lastBookedSlots.length !== newBookedSlots.length) {
+        return true;
+    }
+    
+    // Comparer les tableaux
+    for (let slot of newBookedSlots) {
+        if (!lastBookedSlots.includes(slot)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Mettre à jour l'affichage des créneaux
+function updateTimeSlotsDisplay(bookedSlots) {
+    const timeSlotElements = document.querySelectorAll('.time-slot');
+    
+    timeSlotElements.forEach(slotElement => {
+        const radio = slotElement.querySelector('input[type="radio"]');
+        if (!radio) return;
+        
+        const slotValue = radio.value;
+        const isBooked = bookedSlots.includes(slotValue);
+        
+        // Mettre à jour l'état du créneau
+        if (isBooked && !slotElement.classList.contains('disabled')) {
+            // Ce créneau vient d'être réservé
+            slotElement.classList.add('disabled');
+            radio.disabled = true;
+            radio.checked = false;
+            
+            // Ajouter un effet visuel subtil
+            slotElement.style.transition = 'all 0.3s ease';
+            slotElement.style.opacity = '0.5';
+            setTimeout(() => {
+                slotElement.style.opacity = '1';
+            }, 300);
+        } else if (!isBooked && slotElement.classList.contains('disabled')) {
+            // Ce créneau est redevenu disponible (rare, mais possible si annulation)
+            slotElement.classList.remove('disabled');
+            radio.disabled = false;
+        }
+    });
+}
+
+// Afficher un avertissement discret si le créneau sélectionné n'est plus dispo
+function showSlotUnavailableWarning() {
+    const container = document.getElementById('timeSlotsContainer');
+    
+    // Créer un message d'avertissement temporaire
+    const warning = document.createElement('div');
+    warning.style.cssText = `
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #991b1b;
+        padding: 0.75rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        animation: slideDown 0.3s ease;
+    `;
+    
+    warning.innerHTML = `
+        <i class="fas fa-exclamation-circle"></i>
+        <span>Le créneau que vous aviez sélectionné vient d'être réservé. Veuillez en choisir un autre.</span>
+    `;
+    
+    container.insertBefore(warning, container.firstChild);
+    
+    // Retirer le message après 5 secondes
+    setTimeout(() => {
+        warning.style.animation = 'slideUp 0.3s ease';
+        setTimeout(() => warning.remove(), 300);
+    }, 5000);
+}
+
+// Charger les créneaux disponibles (version améliorée)
+function loadAvailableSlots(terrainId, date) {
+    fetch(`get_available_slots.php?terrain_id=${terrainId}&date=${date}`)
+        .then(response => {
+            if (!response.ok) throw new Error('Erreur réseau');
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                displayTimeSlots(data.booked_slots || []);
+                lastBookedSlots = [...(data.booked_slots || [])];
+                selectedTimeSlot = null;
+                updateSubmitButton();
+                
+                // Démarrer le polling pour cette date et ce terrain
+                startSlotsPolling(terrainId, date);
+            }
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            displayTimeSlots([]);
+        });
+}
+
+// Événement pour le changement de date
+document.addEventListener('DOMContentLoaded', function() {
+    const dateInput = document.getElementById('dateReservation');
+    if (dateInput) {
+        dateInput.addEventListener('change', function() {
+            const date = this.value;
+            const terrainId = document.getElementById('selectedTerrainId')?.value || terrainId;
+            
+            if (date && terrainId) {
+                loadAvailableSlots(terrainId, date);
+            }
+        });
+    }
+    
+    // Arrêter le polling quand l'utilisateur quitte la page
+    window.addEventListener('beforeunload', () => {
+        stopSlotsPolling();
+    });
+    
+    // Arrêter le polling si l'onglet n'est plus visible
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopSlotsPolling();
+        } else if (currentDate && currentTerrainId) {
+            // Redémarrer le polling quand l'onglet redevient visible
+            startSlotsPolling(currentTerrainId, currentDate);
+        }
+    });
+});
+
+// Ajouter les animations CSS
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideDown {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    @keyframes slideUp {
+        from {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        to {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+    }
+`;
+// Validation du formulaire avec vérification en temps réel
+document.getElementById('reservationForm').addEventListener('submit', function(e) {
+    e.preventDefault(); // Empêcher la soumission par défaut
+    
+    const dateSelected = document.getElementById('dateReservation').value;
+    const terrainId = document.getElementById('selectedTerrainId')?.value || terrainId;
+    
+    // Validations de base
+    if (!terrainId) {
+        alert('Veuillez sélectionner un terrain');
+        return false;
+    }
+    
+    if (!dateSelected) {
+        alert('Veuillez sélectionner une date');
+        return false;
+    }
+    
+    if (!selectedTimeSlot) {
+        alert('Veuillez sélectionner un créneau horaire');
+        return false;
+    }
+    
+    // Désactiver le bouton de soumission pour éviter les doubles clics
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Vérification...';
+    
+    // Vérifier une dernière fois que le créneau est toujours disponible
+    const selectedSlotValue = selectedTimeSlot.value;
+    
+    fetch(`get_available_slots.php?terrain_id=${terrainId}&date=${dateSelected}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.booked_slots) {
+                // Vérifier si le créneau sélectionné est maintenant réservé
+                if (data.booked_slots.includes(selectedSlotValue)) {
+                    // Le créneau vient d'être réservé
+                    alert('Désolé, ce créneau vient d\'être réservé par un autre utilisateur. Veuillez en choisir un autre.');
+                    
+                    // Réactiver le bouton
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-calendar-check"></i> Confirmer la réservation';
+                    
+                    // Mettre à jour l'affichage
+                    updateTimeSlotsDisplay(data.booked_slots);
+                    selectedTimeSlot = null;
+                    updateSubmitButton();
+                    
+                    return false;
+                }
+                
+                // Le créneau est toujours disponible, soumettre le formulaire
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Réservation en cours...';
+                document.getElementById('reservationForm').submit();
+            } else {
+                throw new Error('Erreur lors de la vérification');
+            }
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            alert('Une erreur est survenue. Veuillez réessayer.');
+            
+            // Réactiver le bouton
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-calendar-check"></i> Confirmer la réservation';
+        });
+    
+    return false;
+});
+
+// Fonction pour empêcher les doubles soumissions
+let isSubmitting = false;
+
+function preventDoubleSubmit(form) {
+    if (isSubmitting) {
+        return false;
+    }
+    isSubmitting = true;
+    
+    // Réinitialiser après 5 secondes (au cas où il y aurait une erreur)
+    setTimeout(() => {
+        isSubmitting = false;
+    }, 5000);
+    
+    return true;
+}
+document.head.appendChild(style);
         let selectedTerrain = null;
         let selectedOptions = {};
         let selectedTimeSlot = null;
