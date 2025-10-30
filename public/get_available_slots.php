@@ -12,7 +12,7 @@ if (!$terrain_id || !$date) {
 }
 
 try {
-    // recuperer tous les creanaux reservees d une date
+    // Récupérer tous les créneaux réservés pour une date donnée
     $stmt = $pdo->prepare("
         SELECT heure_debut 
         FROM Reservation 
@@ -28,12 +28,17 @@ try {
     }
     
     echo json_encode([
+        'success' => true,
         'booked_slots' => $booked_slots,
         'date' => $date,
-        'terrain_id' => $terrain_id
+        'terrain_id' => $terrain_id,
+        'timestamp' => time()
     ]);
     
 } catch (PDOException $e) {
-    echo json_encode(['error' => 'Erreur de base de données: ' . $e->getMessage()]);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Erreur de base de données: ' . $e->getMessage()
+    ]);
 }
 ?>
