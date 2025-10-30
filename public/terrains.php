@@ -404,31 +404,7 @@ try {
     </style>
 </head>
 <body>
-    <header>
-        <nav>
-            <a href="home.php" class="logo">
-                <i class="fas fa-futbol"></i>
-                FootBooking
-            </a>
-            
-            <ul class="nav-links">
-                <li><a href="home.php">Accueil</a></li>
-                <li><a href="terrains.php" style="color: #16a34a;">Nos Terrains</a></li>
-                <li><a href="reserver_terrain.php">Réserver</a></li>
-            </ul>
-
-            <div class="auth-buttons">
-                <a href="login.php" class="btn btn-outline">
-                    <i class="fa-solid fa-right-to-bracket"></i>
-                    Se connecter
-                </a>
-                <a href="register.php" class="btn btn-primary">
-                    <i class="fa-solid fa-user-plus"></i>
-                    S'inscrire
-                </a>
-            </div>
-        </nav>
-    </header>
+    <?php include '../includes/navbar.php'; ?>
 
     <!-- Hero Section -->
     <section class="hero">

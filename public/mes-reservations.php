@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../config/database.php';
+require_once '../config/config.php';
 
 // Vérifier si l'utilisateur est connecté
 if (!isset($_SESSION['user_id'])) {
@@ -9,66 +10,66 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
+$message = '';
+$message_type = '';
+
+// Récupérer les messages de session
+if (isset($_SESSION['message'])) {
+    $message = $_SESSION['message'];
+    $message_type = $_SESSION['message_type'];
+    unset($_SESSION['message']);
+    unset($_SESSION['message_type']);
+}
 
 // Récupérer les réservations de l'utilisateur
-$sql = "SELECT r.*, t.nom_terrain, t.adresse, t.ville, t.taille, t.type, t.prix_heure,
-               GROUP_CONCAT(DISTINCT o.nom_option SEPARATOR ', ') as options,
-               GROUP_CONCAT(DISTINCT o.prix SEPARATOR ', ') as prix_options,
-               f.montant_total
+try {
+    $stmt = $pdo->prepare("
+        SELECT 
+            r.id_reservation,
+            r.date_reservation,
+            r.heure_debut,
+            r.heure_fin,
+            r.commentaires,
+            r.statut,
+            r.date_creation,
+            t.nom_terrain,
+            t.ville,
+            t.taille,
+            t.type,
+            t.prix_heure,
+            GROUP_CONCAT(o.nom_option SEPARATOR ', ') as options
         FROM Reservation r
         JOIN Terrain t ON r.id_terrain = t.id_terrain
         LEFT JOIN Reservation_Option ro ON r.id_reservation = ro.id_reservation
         LEFT JOIN OptionSupplementaire o ON ro.id_option = o.id_option
-        LEFT JOIN Facture f ON r.id_reservation = f.id_reservation
         WHERE r.id_utilisateur = ?
         GROUP BY r.id_reservation
-        ORDER BY r.date_reservation DESC, r.heure_debut DESC";
-
-$stmt = $pdo->prepare($sql);
-$stmt->execute([$user_id]);
-$reservations = $stmt->fetchAll();
+        ORDER BY r.date_reservation DESC, r.heure_debut DESC
+    ");
+    $stmt->execute([$user_id]);
+    $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $message = "Erreur lors de la récupération des réservations : " . $e->getMessage();
+    $message_type = "error";
+    $reservations = [];
+}
 
 // Fonction pour vérifier si la modification est possible (48h avant)
 function canModifyReservation($date_reservation, $heure_debut) {
     $reservation_datetime = new DateTime($date_reservation . ' ' . $heure_debut);
-    $current_datetime = new DateTime();
-    $interval = $current_datetime->diff($reservation_datetime);
+    $now = new DateTime();
+    $diff = $now->diff($reservation_datetime);
+    $hours_until = ($diff->days * 24) + $diff->h;
     
-    // Calculer le nombre total d'heures jusqu'à la réservation
-    $total_hours = ($interval->days * 24) + $interval->h;
-    
-    // Modification possible si plus de 48 heures restantes
-    return $total_hours > 48;
-}
-
-// Traitement de l'annulation
-if (isset($_POST['annuler_reservation'])) {
-    $reservation_id = $_POST['reservation_id'];
-    
-    // Vérifier que la réservation appartient bien à l'utilisateur
-    $check_sql = "SELECT id_reservation, date_reservation, heure_debut FROM Reservation WHERE id_reservation = ? AND id_utilisateur = ?";
-    $check_stmt = $pdo->prepare($check_sql);
-    $check_stmt->execute([$reservation_id, $user_id]);
-    $reservation_data = $check_stmt->fetch();
-    
-    if ($reservation_data) {
-        // Vérifier si l'annulation est possible (48h avant)
-        if (canModifyReservation($reservation_data['date_reservation'], $reservation_data['heure_debut'])) {
-            // Annuler la réservation
-            $update_sql = "UPDATE Reservation SET statut = 'Annulée', date_modification = NOW() WHERE id_reservation = ?";
-            $update_stmt = $pdo->prepare($update_sql);
-            $update_stmt->execute([$reservation_id]);
-            
-            $_SESSION['success_message'] = "Réservation annulée avec succès.";
-        } else {
-            $_SESSION['error_message'] = "Impossible d'annuler la réservation. L'annulation doit être effectuée au moins 48 heures avant le début du match.";
-        }
-        header('Location: mes-reservations.php');
-        exit();
+    // Si la date est passée, retourner false
+    if ($reservation_datetime < $now) {
+        return false;
     }
+    
+    // Vérifier s'il reste au moins 48 heures
+    return $hours_until >= 48;
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -77,20 +78,7 @@ if (isset($_POST['annuler_reservation'])) {
     <title>Mes Réservations - FootBooking</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
-        /* [Conserver tout le CSS précédent] */
         * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f9fafb;
-        }
-* {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -131,6 +119,11 @@ if (isset($_POST['annuler_reservation'])) {
             text-decoration: none;
         }
 
+        .logo svg {
+            width: 32px;
+            height: 32px;
+        }
+
         .nav-links {
             display: flex;
             list-style: none;
@@ -154,19 +147,6 @@ if (isset($_POST['annuler_reservation'])) {
             gap: 1rem;
         }
 
-        .btn {
-            padding: 0.6rem 1.5rem;
-            border-radius: 8px;
-            text-decoration: none;
-            font-weight: 600;
-            transition: all 0.3s;
-            border: none;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
         .btn-outline {
             background: white;
             color: #16a34a;
@@ -177,9 +157,274 @@ if (isset($_POST['annuler_reservation'])) {
             background: #f0fdf4;
         }
 
+        /* Page Header */
+        .page-header {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            color: white;
+            padding: 3rem 5%;
+            text-align: center;
+        }
+
+        .page-header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .page-header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Main Content */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 3rem 5%;
+        }
+
+        /* Messages */
+        .message {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .message.success {
+            background: #dcfce7;
+            color: #166534;
+            border-left: 4px solid #16a34a;
+        }
+
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border-left: 4px solid #dc2626;
+        }
+
+        .message i {
+            font-size: 1.5rem;
+        }
+
+        /* Réservations Grid */
+        .reservations-grid {
+            display: grid;
+            gap: 2rem;
+        }
+
+        .reservation-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .reservation-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        }
+
+        .reservation-header {
+            padding: 1.5rem;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .reservation-title {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .reservation-title h3 {
+            font-size: 1.3rem;
+            color: #1f2937;
+        }
+
+        .status-badge {
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-badge.confirmee {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-badge.annulee {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-badge.modifiee {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .reservation-body {
+            padding: 1.5rem;
+        }
+
+        .reservation-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .detail-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .detail-icon {
+            width: 40px;
+            height: 40px;
+            background: #dcfce7;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #16a34a;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .detail-content h4 {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.25rem;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .detail-content p {
+            font-size: 1rem;
+            color: #1f2937;
+            font-weight: 500;
+        }
+
+        .commentaires {
+            background: #f9fafb;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+        }
+
+        .commentaires h4 {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .commentaires p {
+            color: #1f2937;
+            line-height: 1.6;
+        }
+
+        .reservation-actions {
+            display: flex;
+            gap: 0.75rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #e5e7eb;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.875rem;
+        }
+
+        .btn-modifier {
+            background: #fed7aa;
+            color: #9a3412;
+            border: 1px solid #fdba74;
+        }
+
+        .btn-modifier:hover:not(:disabled) {
+            background: #fdba74;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(251, 146, 60, 0.3);
+        }
+
+        .btn-annuler {
+            background: #fecaca;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+
+        .btn-annuler:hover:not(:disabled) {
+            background: #fca5a5;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .warning-text {
+            color: #dc2626;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .no-reservations {
+            text-align: center;
+            padding: 4rem 2rem;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        .no-reservations i {
+            font-size: 4rem;
+            color: #d1d5db;
+            margin-bottom: 1rem;
+        }
+
+        .no-reservations h3 {
+            font-size: 1.5rem;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+
+        .no-reservations p {
+            color: #6b7280;
+            margin-bottom: 2rem;
+        }
+
         .btn-primary {
             background: #16a34a;
             color: white;
+            padding: 0.8rem 2rem;
+            font-size: 1rem;
         }
 
         .btn-primary:hover {
@@ -188,208 +433,13 @@ if (isset($_POST['annuler_reservation'])) {
             box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3);
         }
 
-        .btn-warning {
-            background: #f59e0b;
-            color: white;
-        }
-
-        .btn-warning:hover {
-            background: #d97706;
-        }
-
-        .btn-danger {
-            background: #dc2626;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #b91c1c;
-        }
-
-        /* Main Content */
-        .main-content {
-            min-height: calc(100vh - 200px);
-            padding: 3rem 5%;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .page-header {
-            text-align: center;
-            margin-bottom: 3rem;
-        }
-
-        .page-title {
-            font-size: 2.5rem;
-            color: #1f2937;
-            margin-bottom: 1rem;
-        }
-
-        .page-subtitle {
-            color: #6b7280;
-            font-size: 1.1rem;
-        }
-
-        /* Reservations List */
-        .reservations-container {
-            display: grid;
-            gap: 1.5rem;
-        }
-
-        .reservation-card {
-            background: white;
-            border-radius: 12px;
-            padding: 2rem;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            border-left: 4px solid #16a34a;
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-
-        .reservation-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-        }
-
-        .reservation-card.cancelled {
-            border-left-color: #dc2626;
-            opacity: 0.7;
-        }
-
-        .reservation-card.modified {
-            border-left-color: #f59e0b;
-        }
-
-        .reservation-header {
-            display: flex;
-            justify-content: between;
-            align-items: flex-start;
-            margin-bottom: 1.5rem;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        .reservation-info {
-            flex: 1;
-        }
-
-        .reservation-title {
-            font-size: 1.4rem;
-            color: #1f2937;
-            margin-bottom: 0.5rem;
-        }
-
-        .reservation-datetime {
-            font-size: 1.1rem;
-            color: #16a34a;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-
-        .reservation-terrain {
-            color: #6b7280;
-            margin-bottom: 0.5rem;
-        }
-
-        .reservation-details {
-            color: #6b7280;
-            margin-bottom: 0.5rem;
-        }
-
-        .reservation-status {
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-
-        .status-confirmed {
-            background: #dcfce7;
-            color: #16a34a;
-        }
-
-        .status-cancelled {
-            background: #fef2f2;
-            color: #dc2626;
-        }
-
-        .status-modified {
-            background: #fefce8;
-            color: #d97706;
-        }
-
-        .reservation-actions {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .reservation-options {
-            margin-top: 1rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .options-title {
-            font-weight: 600;
-            color: #374151;
-            margin-bottom: 0.5rem;
-        }
-
-        .options-list {
-            color: #6b7280;
-        }
-
-        .reservation-price {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #1f2937;
-            margin-top: 1rem;
-        }
-
-        .no-reservations {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: #6b7280;
-        }
-
-        .no-reservations i {
-            font-size: 4rem;
-            margin-bottom: 1.5rem;
-            color: #d1d5db;
-        }
-
-        .no-reservations h3 {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            color: #374151;
-        }
-
-        /* Messages */
-        .alert {
-            padding: 1rem 1.5rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            border-left: 4px solid;
-        }
-
-        .alert-success {
-            background: #f0fdf4;
-            border-color: #16a34a;
-            color: #166534;
-        }
-
-        .alert-error {
-            background: #fef2f2;
-            border-color: #dc2626;
-            color: #991b1b;
-        }
-
         /* Footer */
         footer {
             background: #1f2937;
             color: white;
             padding: 3rem 5%;
             text-align: center;
+            margin-top: 4rem;
         }
 
         footer p {
@@ -402,171 +452,176 @@ if (isset($_POST['annuler_reservation'])) {
                 display: none;
             }
 
-            .page-title {
+            .page-header h1 {
                 font-size: 2rem;
             }
 
             .reservation-header {
                 flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .reservation-details {
+                grid-template-columns: 1fr;
             }
 
             .reservation-actions {
-                width: 100%;
+                flex-direction: row;
                 justify-content: flex-start;
             }
 
             .btn {
-                flex: 1;
-                justify-content: center;
-                min-width: 120px;
+                flex: 0 0 auto;
             }
         }
-
-        .btn-disabled {
-            background: #9ca3af;
-            color: white;
-            cursor: not-allowed;
-            opacity: 0.6;
-        }
-
-        .btn-disabled:hover {
-            background: #9ca3af;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .modification-info {
-            background: #fefce8;
-            border: 1px solid #fef08a;
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            color: #854d0e;
-        }
-
-        .modification-info i {
-            color: #ca8a04;
-        }
-
     </style>
 </head>
 <body>
     <?php include '../includes/navbar.php'; ?>
 
-    <div class="main-content">
-        <div class="page-header">
-            <h1 class="page-title">Mes Réservations</h1>
-            <p class="page-subtitle">Consultez et gérez l'ensemble de vos réservations de terrains de football</p>
-        </div>
+    <!-- Page Header -->
+    <section class="page-header">
+        <h1><i class="fas fa-calendar-check"></i> Mes Réservations</h1>
+        <p>Gérez toutes vos réservations de terrains de football</p>
+    </section>
 
-        <?php if (isset($_SESSION['success_message'])): ?>
-            <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i>
-                <?= $_SESSION['success_message']; ?>
-                <?php unset($_SESSION['success_message']); ?>
+    <!-- Main Content -->
+    <div class="container">
+        <?php if ($message): ?>
+            <div class="message <?php echo $message_type; ?>">
+                <i class="fas fa-<?php echo $message_type === 'success' ? 'check-circle' : 'exclamation-circle'; ?>"></i>
+                <span><?php echo htmlspecialchars($message); ?></span>
             </div>
         <?php endif; ?>
-
-        <?php if (isset($_SESSION['error_message'])): ?>
-            <div class="alert alert-error">
-                <i class="fas fa-exclamation-circle"></i>
-                <?= $_SESSION['error_message']; ?>
-                <?php unset($_SESSION['error_message']); ?>
-            </div>
-        <?php endif; ?>
-
-        <div class="modification-info">
-            <i class="fas fa-info-circle"></i>
-            <strong>Information importante :</strong> La modification et l'annulation des réservations sont possibles jusqu'à 48 heures avant le début du match, sous réserve de disponibilité du terrain.
-        </div>
 
         <?php if (empty($reservations)): ?>
             <div class="no-reservations">
                 <i class="fas fa-calendar-times"></i>
-                <h3>Aucune réservation trouvée</h3>
+                <h3>Aucune réservation</h3>
                 <p>Vous n'avez pas encore effectué de réservation.</p>
-                <a href="reservation.php" class="btn btn-primary" style="margin-top: 1.5rem;">
-                    <i class="fas fa-plus"></i>
-                    Faire une réservation
+                <a href="reservation.php" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Faire une réservation
                 </a>
             </div>
         <?php else: ?>
-            <div class="reservations-container">
-                <?php foreach ($reservations as $reservation): 
+            <div class="reservations-grid">
+                <?php foreach ($reservations as $reservation): ?>
+                    <?php 
                     $can_modify = canModifyReservation($reservation['date_reservation'], $reservation['heure_debut']);
-                    $is_confirmed = strtolower($reservation['statut']) === 'confirmée';
-                ?>
-                    <div class="reservation-card <?= strtolower($reservation['statut']) === 'annulée' ? 'cancelled' : '' ?> <?= strtolower($reservation['statut']) === 'modifiée' ? 'modified' : '' ?>">
+                    $is_cancelled = $reservation['statut'] === 'Annulée';
+                    $is_past = strtotime($reservation['date_reservation'] . ' ' . $reservation['heure_debut']) < time();
+                    $can_interact = !$is_cancelled && !$is_past;
+                    ?>
+                    <div class="reservation-card">
                         <div class="reservation-header">
-                            <div class="reservation-info">
-                                <h3 class="reservation-title">Réservation #<?= $reservation['id_reservation'] ?></h3>
-                                <div class="reservation-datetime">
-                                    <i class="fas fa-calendar-day"></i>
-                                    <?= date('d/m/Y', strtotime($reservation['date_reservation'])) ?> 
-                                    • 
-                                    <i class="fas fa-clock"></i>
-                                    <?= date('H:i', strtotime($reservation['heure_debut'])) ?> - <?= date('H:i', strtotime($reservation['heure_fin'])) ?>
-                                </div>
-                                <div class="reservation-terrain">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <?= htmlspecialchars($reservation['nom_terrain']) ?> - <?= htmlspecialchars($reservation['ville']) ?>
-                                </div>
-                                <div class="reservation-details">
-                                    <i class="fas fa-futbol"></i>
-                                    <?= $reservation['taille'] ?> • <?= $reservation['type'] ?>
-                                </div>
-                                <?php if (!$can_modify && $is_confirmed): ?>
-                                    <div class="modification-info" style="margin-top: 1rem; margin-bottom: 0; padding: 0.75rem;">
-                                        <i class="fas fa-exclamation-triangle"></i>
-                                        Modification impossible - Moins de 48h avant le match
-                                    </div>
-                                <?php endif; ?>
-                                <?php if ($reservation['options']): ?>
-                                    <div class="reservation-options">
-                                        <div class="options-title">
-                                            <i class="fas fa-plus-circle"></i>
-                                            Options supplémentaires :
-                                        </div>
-                                        <div class="options-list"><?= htmlspecialchars($reservation['options']) ?></div>
-                                    </div>
-                                <?php endif; ?>
-                                <?php if ($reservation['montant_total']): ?>
-                                    <div class="reservation-price">
-                                        <i class="fas fa-receipt"></i>
-                                        Total : <?= number_format($reservation['montant_total'], 2, ',', ' ') ?> €
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                            <div class="reservation-status-container">
-                                <span class="reservation-status status-<?= strtolower($reservation['statut']) ?>">
-                                    <?= $reservation['statut'] ?>
+                            <div class="reservation-title">
+                                <h3><?php echo htmlspecialchars($reservation['nom_terrain']); ?></h3>
+                                <span class="status-badge <?php echo strtolower(str_replace('é', 'e', $reservation['statut'])); ?>">
+                                    <?php echo htmlspecialchars($reservation['statut']); ?>
                                 </span>
                             </div>
+                            <span style="color: #6b7280; font-size: 0.9rem;">
+                                Réservé le <?php echo date('d/m/Y', strtotime($reservation['date_creation'])); ?>
+                            </span>
                         </div>
-                        
-                        <?php if ($is_confirmed): ?>
-                            <div class="reservation-actions">
-                                <?php if ($can_modify): ?>
-                                    <a href="modifier-reservation.php?id=<?= $reservation['id_reservation'] ?>" class="btn btn-warning">
-                                        <i class="fas fa-edit"></i>
-                                        Modifier
-                                    </a>
-                                <?php else: ?>
-                                    <button class="btn btn-warning btn-disabled" disabled title="Modification impossible - Moins de 48h avant le match">
-                                        <i class="fas fa-edit"></i>
-                                        Modifier
-                                    </button>
+
+                        <div class="reservation-body">
+                            <div class="reservation-details">
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-calendar"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Date</h4>
+                                        <p><?php echo date('d/m/Y', strtotime($reservation['date_reservation'])); ?></p>
+                                    </div>
+                                </div>
+
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-clock"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Horaire</h4>
+                                        <p><?php echo substr($reservation['heure_debut'], 0, 5) . ' - ' . substr($reservation['heure_fin'], 0, 5); ?></p>
+                                    </div>
+                                </div>
+
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-map-marker-alt"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Ville</h4>
+                                        <p><?php echo htmlspecialchars($reservation['ville']); ?></p>
+                                    </div>
+                                </div>
+
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-expand"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Taille</h4>
+                                        <p><?php echo htmlspecialchars($reservation['taille']); ?></p>
+                                    </div>
+                                </div>
+
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-futbol"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Type de terrain</h4>
+                                        <p><?php echo htmlspecialchars($reservation['type']); ?></p>
+                                    </div>
+                                </div>
+
+                                <?php if ($reservation['options']): ?>
+                                <div class="detail-item">
+                                    <div class="detail-icon">
+                                        <i class="fas fa-plus-circle"></i>
+                                    </div>
+                                    <div class="detail-content">
+                                        <h4>Options</h4>
+                                        <p><?php echo htmlspecialchars($reservation['options']); ?></p>
+                                    </div>
+                                </div>
                                 <?php endif; ?>
-                                
-                                <form method="POST" style="display: inline;" onsubmit="return confirm('Êtes-vous sûr de vouloir annuler cette réservation ?')">
-                                    <input type="hidden" name="reservation_id" value="<?= $reservation['id_reservation'] ?>">
-                                    <button type="submit" name="annuler_reservation" class="btn btn-danger" <?= !$can_modify ? 'disabled' : '' ?>>
-                                        <i class="fas fa-times"></i>
-                                        <?= $can_modify ? 'Annuler' : 'Annulation impossible' ?>
-                                    </button>
-                                </form>
                             </div>
-                        <?php endif; ?>
+
+                            <?php if ($reservation['commentaires']): ?>
+                            <div class="commentaires">
+                                <h4>Commentaires</h4>
+                                <p><?php echo nl2br(htmlspecialchars($reservation['commentaires'])); ?></p>
+                            </div>
+                            <?php endif; ?>
+
+                            <?php if (!$is_cancelled && !$is_past): ?>
+                            <div class="reservation-actions">
+                                <a href="modifier-reservation.php?id=<?php echo $reservation['id_reservation']; ?>" 
+                                   class="btn btn-modifier" 
+                                   <?php echo !$can_modify ? 'style="pointer-events: none; opacity: 0.5;"' : ''; ?>>
+                                    <i class="fas fa-edit"></i>
+                                    Modifier
+                                </a>
+                                
+                                <a href="annuler-reservation.php?id=<?php echo $reservation['id_reservation']; ?>" 
+                                   class="btn btn-annuler"
+                                   onclick="return confirm('Êtes-vous sûr de vouloir annuler cette réservation ?');">
+                                    <i class="fas fa-times-circle"></i>
+                                    Annuler
+                                </a>
+                            </div>
+                            
+                            <?php if (!$can_modify): ?>
+                            <div class="warning-text">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <span>La modification n'est plus possible (moins de 48h avant le match)</span>
+                            </div>
+                            <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 <?php endforeach; ?>
             </div>

@@ -310,12 +310,11 @@ require_once '../config/config.php';
             }
         }
 
-        </styles>
+        </style>
     
 </head>
 <body>
     <?php include '../includes/navbar.php'; ?>
-    
     <!-- Hero Section -->
     <section class="hero">
         <div class="hero-content">
