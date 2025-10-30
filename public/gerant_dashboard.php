@@ -1,4 +1,23 @@
 <?php
+/**
+ * Tableau de bord du gérant de terrain
+ * 
+ * Ce fichier affiche le tableau de bord principal pour les gérants de terrains
+ * avec les statistiques clés et les actions rapides disponibles.
+ * 
+ * @author Jihane Chouhe
+ * @version 1.0.0
+ * @date 2024-10-30
+ * 
+ * @changelog
+ * Version 1.0.0 (2024-10-30)
+ * - Création initiale du tableau de bord gérant
+ * - Ajout de l'affichage des statistiques (réservations totales, du jour, CA mensuel)
+ * - Ajout des cartes d'actions rapides
+ * - Implémentation du design responsive
+ * - Ajout de la section de bienvenue personnalisée
+ */
+
 session_start();
 require_once '../config/database.php';
 
@@ -8,7 +27,9 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'gerant_terrain') {
     exit;
 }
 
-// Récupérer les informations du gérant
+/**
+ * Récupération des informations du gérant connecté
+ */
 try {
     $stmt = $pdo->prepare("SELECT nom, prenom, email FROM Utilisateur WHERE id_utilisateur = ?");
     $stmt->execute([$_SESSION['user_id']]);
@@ -17,7 +38,12 @@ try {
     die("Erreur: " . $e->getMessage());
 }
 
-// Récupérer les statistiques
+/**
+ * Calcul des statistiques du tableau de bord
+ * - Nombre total de réservations
+ * - Réservations du jour
+ * - Chiffre d'affaires mensuel
+ */
 try {
     // Nombre total de réservations
     $stmt = $pdo->prepare("
@@ -39,7 +65,7 @@ try {
     $stmt->execute([$_SESSION['user_id']]);
     $stats['reservations_aujourdhui'] = $stmt->fetch(PDO::FETCH_ASSOC)['reservations_aujourdhui'];
 
-    // Chiffre d'affaires du mois
+    // Chiffre d'affaires du mois en cours
     $stmt = $pdo->prepare("
         SELECT COALESCE(SUM(t.prix_heure), 0) as ca_mois 
         FROM Reservation r 
@@ -52,6 +78,7 @@ try {
     $stats['ca_mois'] = $stmt->fetch(PDO::FETCH_ASSOC)['ca_mois'];
 
 } catch (PDOException $e) {
+    // Initialisation des statistiques à zéro en cas d'erreur
     $stats = [
         'total_reservations' => 0,
         'reservations_aujourdhui' => 0,
@@ -80,6 +107,7 @@ try {
             color: #334155;
         }
 
+        /* === HEADER === */
         .header {
             background: white;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
@@ -142,12 +170,14 @@ try {
             background: #dc2626;
         }
 
+        /* === CONTAINER === */
         .container {
             max-width: 1400px;
             margin: 2rem auto;
             padding: 0 5%;
         }
 
+        /* === SECTION BIENVENUE === */
         .welcome-section {
             background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
             color: white;
@@ -165,6 +195,7 @@ try {
             opacity: 0.9;
         }
 
+        /* === GRILLE STATISTIQUES === */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -198,6 +229,7 @@ try {
             font-size: 0.875rem;
         }
 
+        /* === GRILLE ACTIONS === */
         .actions-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -240,6 +272,7 @@ try {
             line-height: 1.5;
         }
 
+        /* === RESPONSIVE === */
         @media (max-width: 768px) {
             .nav {
                 flex-direction: column;
@@ -261,6 +294,7 @@ try {
     </style>
 </head>
 <body>
+    <!-- Header avec navigation -->
     <div class="header">
         <div class="nav">
             <a href="gerant_dashboard.php" class="logo">
@@ -281,12 +315,15 @@ try {
     </div>
 
     <div class="container">
+        <!-- Section de bienvenue personnalisée -->
         <div class="welcome-section">
             <h1 class="welcome-title">Bonjour, <?php echo htmlspecialchars($gerant['prenom']); ?> !</h1>
             <p class="welcome-subtitle">Bienvenue dans votre espace gérant</p>
         </div>
 
+        <!-- Grille des statistiques clés -->
         <div class="stats-grid">
+            <!-- Réservations totales -->
             <div class="stat-card">
                 <div class="stat-icon">
                     <i class="fas fa-calendar-check"></i>
@@ -295,6 +332,7 @@ try {
                 <div class="stat-label">Réservations totales</div>
             </div>
 
+            <!-- Réservations aujourd'hui -->
             <div class="stat-card">
                 <div class="stat-icon">
                     <i class="fas fa-calendar-day"></i>
@@ -303,6 +341,7 @@ try {
                 <div class="stat-label">Réservations aujourd'hui</div>
             </div>
 
+            <!-- Chiffre d'affaires mensuel -->
             <div class="stat-card">
                 <div class="stat-icon">
                     <i class="fas fa-chart-line"></i>
@@ -312,7 +351,9 @@ try {
             </div>
         </div>
 
+        <!-- Grille des actions rapides -->
         <div class="actions-grid">
+            <!-- Action: Gérer les réservations -->
             <a href="gerant_reservations.php" class="action-card">
                 <div class="action-icon">
                     <i class="fas fa-list"></i>
@@ -321,6 +362,7 @@ try {
                 <p class="action-description">Consultez et gérez toutes les réservations de vos terrains</p>
             </a>
 
+            <!-- Action: Mes terrains -->
             <a href="gerant_terrains.php" class="action-card">
                 <div class="action-icon">
                     <i class="fas fa-futbol"></i>
@@ -329,6 +371,7 @@ try {
                 <p class="action-description">Consultez et gérez vos terrains</p>
             </a>
 
+            <!-- Action: Rapports et statistiques -->
             <a href="gerant_rapports.php" class="action-card">
                 <div class="action-icon">
                     <i class="fas fa-chart-bar"></i>
