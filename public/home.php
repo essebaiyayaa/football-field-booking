@@ -1,3 +1,8 @@
+<?php
+session_start();
+require_once '../config/database.php';
+require_once '../config/config.php';
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -5,8 +10,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FootBooking - Réservation de Terrains de Foot</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
-        * {
+    <style>   
+           * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
@@ -304,10 +309,13 @@
                 grid-template-columns: 1fr;
             }
         }
-    </style>
+
+        </styles>
+    
 </head>
 <body>
     <?php include '../includes/navbar.php'; ?>
+    
     <!-- Hero Section -->
     <section class="hero">
         <div class="hero-content">
@@ -384,6 +392,7 @@
             </div>
         </div>
     </section>
+    
     <?php include '../includes/footer.php'; ?>
 </body>
 </html>

@@ -1,234 +1,377 @@
-
 <?php
-
+session_start();
 require_once '../config/database.php';
-require_once '../config/config.php';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Vérification session
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
 
+// Récupérer les informations utilisateur
+try {
+    $stmt = $pdo->prepare("SELECT nom, prenom, email, telephone FROM Utilisateur WHERE id_utilisateur = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    $date = $_POST['date']; 
-    $type = $_POST['type']; 
-    $creneau = $_POST['creneau']; 
-    $taille = $_POST['taille']; 
-    $options_sup = $_POST["options"] ?? []; 
-    $demande = $_POST['demande']; 
-    $nom_client = $_POST['nom']; 
-    $prenom_client = $_POST['prenom']; 
-    $email_client = $_POST['email']; 
-    $tel_client = $_POST['telephone'];
-    $id_terrain = $_POST['id_terrain'] ?? 1;
-    $commentaires = $_POST['commentaires'] ?? "Some text";
-
-    
-    if (preg_match('/^(\d{1,2})h-(\d{1,2})h$/', $creneau, $matches)) {
-        $heure_debut = str_pad($matches[1], 2, '0', STR_PAD_LEFT) . ":00:00";
-        $heure_fin = str_pad($matches[2], 2, '0', STR_PAD_LEFT) . ":00:00";
-    } else {
-        die("Format du créneau invalide. Exemple attendu : 16h-17h");
+    // Vérifier si l'utilisateur existe
+    if (!$user) {
+        header('Location: login.php');
+        exit;
     }
+} catch (PDOException $e) {
+    die("Erreur: " . $e->getMessage());
+}
 
-    // Prices
-    $prix_options = [
-        'ballons' => 50,
-        'maillots' => 100,
-        'arbitre' => 200,
-        'douche' => 30
-    ];
+// Récupérer les options supplémentaires
+try {
+    $stmt = $pdo->query("SELECT * FROM OptionSupplementaire ORDER BY nom_option");
+    $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $options = [];
+}
 
+// Récupérer les types et tailles disponibles
+try {
+    $stmt = $pdo->query("SELECT DISTINCT type FROM Terrain ORDER BY type");
+    $types = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    $stmt = $pdo->query("SELECT DISTINCT taille FROM Terrain ORDER BY taille");
+    $tailles = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (PDOException $e) {
+    $types = [];
+    $tailles = [];
+}
+
+// Traitement de la réservation
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_reservation'])) {
+    $id_terrain = $_POST['id_terrain'];
+    $date_reservation = $_POST['date_reservation'];
+    $heure_debut = $_POST['heure_debut'];
+    $heure_fin = date('H:i:s', strtotime($heure_debut) + 3600);
+    $options_selectionnees = $_POST['options'] ?? [];
+    $commentaires = $_POST['commentaires'] ?? '';
+    
     try {
         $pdo->beginTransaction();
-
         
-        $stmt_user = $pdo->prepare("SELECT id_utilisateur FROM Utilisateur WHERE email = :email");
-        $stmt_user->execute([':email' => $email_client]);
-        $id_utilisateur = $stmt_user->fetchColumn();
-
-        
-        if (!$id_utilisateur) {
-            header('Location: /register.php');
-            exit;
-        }
-
-        
-        $stmt_res = $pdo->prepare("
-            INSERT INTO Reservation (date_reservation, heure_debut, heure_fin, id_utilisateur, id_terrain, commentaires)
-            VALUES (:date_reservation, :heure_debut, :heure_fin, :id_utilisateur, :id_terrain, :commentaires)
+        // Insertion de la réservation
+        $stmt = $pdo->prepare("
+            INSERT INTO Reservation (date_reservation, heure_debut, heure_fin, id_utilisateur, id_terrain, commentaires, statut)
+            VALUES (?, ?, ?, ?, ?, ?, 'Confirmée')
         ");
-        $stmt_res->execute([
-            ':date_reservation' => $date,
-            ':heure_debut' => $heure_debut,
-            ':heure_fin' => $heure_fin,
-            ':id_utilisateur' => $id_utilisateur,
-            ':id_terrain' => $id_terrain,
-            ':commentaires' => $commentaires
-        ]);
-
+        $stmt->execute([$date_reservation, $heure_debut, $heure_fin, $_SESSION['user_id'], $id_terrain, $commentaires]);
         $id_reservation = $pdo->lastInsertId();
-
-        $stmt_check = $pdo->prepare("SELECT id_option FROM OptionSupplementaire WHERE nom_option = :nom");
-        $stmt_insert_option = $pdo->prepare("
-            INSERT INTO OptionSupplementaire (nom_option, prix) VALUES (:nom, :prix)
-        ");
-        $stmt_link = $pdo->prepare("
-            INSERT INTO Reservation_Option (id_reservation, id_option)
-            VALUES (:id_reservation, :id_option)
-        ");
-
-        foreach ($options_sup as $nom_option) {
-            $nom_option = strtolower(trim($nom_option)); 
-
-            
-            $stmt_check->execute([':nom' => $nom_option]);
-            $id_option = $stmt_check->fetchColumn();
-
-            if (!$id_option) {
-                $stmt_insert_option->execute([
-                    ':nom' => $nom_option,
-                    ':prix' => $prix_options[$nom_option] ?? 0
-                ]);
-                $id_option = $pdo->lastInsertId();
+        
+        // Insertion des options
+        if (!empty($options_selectionnees)) {
+            $stmt = $pdo->prepare("INSERT INTO Reservation_Option (id_reservation, id_option) VALUES (?, ?)");
+            foreach ($options_selectionnees as $id_option) {
+                $stmt->execute([$id_reservation, $id_option]);
             }
-
-            
-            $stmt_link->execute([
-                ':id_reservation' => $id_reservation,
-                ':id_option' => $id_option
-            ]);
         }
-
+        
         $pdo->commit();
-        echo "Réservation et options enregistrées avec succès!";
-    } catch (Exception $e) {
+        
+        // Redirection vers la facture
+        header("Location: facture.php?id=" . $id_reservation);
+        exit;
+        
+    } catch (PDOException $e) {
         $pdo->rollBack();
-        echo "Erreur : " . $e->getMessage();
+        $error = "Erreur lors de la réservation: " . $e->getMessage();
     }
 }
 ?>
-
-
-
-
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Formulaire de Réservation</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/lucide-static@0.263.0/umd/lucide.min.js"></script>
+    <title>Nouvelle Réservation - FootBooking</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
         body {
-            background: linear-gradient(135deg, #f0fdf4 0%, #d1fae5 100%);
-            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f9fafb;
             color: #333;
         }
 
-        .container {
-            max-width: 1200px;
+        header {
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 5%;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 20px;
         }
 
-        .header {
-            text-align: center;
-            margin-bottom: 2rem;
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #16a34a;
+            text-decoration: none;
         }
 
-        .header h1 {
-            color: #059669;
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-            font-weight: 700;
-        }
-
-        .header p {
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
             color: #6b7280;
-            font-size: 1.1rem;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
         }
 
-        .form-container {
-            background-color: white;
-            border-radius: 1rem;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-            padding: 2rem;
+        .back-btn:hover {
+            color: #16a34a;
         }
 
-        .form-grid {
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 5%;
             display: grid;
-            grid-template-columns: 1fr;
-            gap: 1.5rem;
+            grid-template-columns: 1fr 400px;
+            gap: 2rem;
+        }
+
+        .form-section {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.07);
+        }
+
+        .section-title {
+            font-size: 1.4rem;
+            color: #1f2937;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .section-title i {
+            color: #16a34a;
+        }
+
+        .user-info {
+            background: #f9fafb;
+            padding: 1.5rem;
+            border-radius: 12px;
             margin-bottom: 2rem;
         }
 
-        @media (min-width: 768px) {
-            .form-grid {
-                grid-template-columns: 1fr 1fr;
-            }
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .info-label {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.25rem;
+        }
+
+        .info-value {
+            font-weight: 600;
+            color: #374151;
         }
 
         .form-group {
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
         }
 
         .form-label {
-            display: flex;
-            align-items: center;
+            display: block;
+            margin-bottom: 0.5rem;
             color: #374151;
             font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-
-        .form-label i {
-            color: #059669;
-            margin-right: 0.5rem;
-            width: 1.25rem;
-            text-align: center;
         }
 
         .form-input, .form-select, .form-textarea {
             width: 100%;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
+            padding: 0.75rem;
             border: 2px solid #e5e7eb;
+            border-radius: 8px;
             font-size: 1rem;
             transition: border-color 0.3s;
         }
 
         .form-input:focus, .form-select:focus, .form-textarea:focus {
             outline: none;
-            border-color: #059669;
+            border-color: #16a34a;
         }
 
-        .form-input.error, .form-select.error {
-            border-color: #ef4444;
-        }
-
-        .error-message {
-            color: #ef4444;
-            font-size: 0.875rem;
-            margin-top: 0.25rem;
-        }
-
-        .options-grid {
+        .criteria-row {
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 1rem;
+            align-items: end;
+        }
+
+        .btn-search {
+            background: #16a34a;
+            color: white;
+            padding: 0.75rem 2rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+
+        .btn-search:hover {
+            background: #15803d;
+        }
+
+        .terrains-list {
+            display: none;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1rem;
             margin-top: 1rem;
         }
 
-        @media (min-width: 768px) {
-            .options-grid {
-                grid-template-columns: 1fr 1fr;
-            }
+        .terrains-list.active {
+            display: grid;
+        }
+
+        .terrain-card {
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .terrain-card:hover {
+            border-color: #16a34a;
+            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.15);
+        }
+
+        .terrain-card.selected {
+            border-color: #16a34a;
+            background: #f0fdf4;
+        }
+
+        .terrain-card input[type="radio"] {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            width: 1.25rem;
+            height: 1.25rem;
+            cursor: pointer;
+        }
+
+        .terrain-card h4 {
+            font-size: 1.2rem;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+
+        .terrain-detail {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #6b7280;
+            margin-bottom: 0.3rem;
+            font-size: 0.9rem;
+        }
+
+        .terrain-detail i {
+            width: 16px;
+        }
+
+        .terrain-price {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #16a34a;
+            margin-top: 0.75rem;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 3rem;
+            color: #6b7280;
+            display: none;
+        }
+
+        .no-results.active {
+            display: block;
+        }
+
+        .time-slots {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .time-slot {
+            position: relative;
+        }
+
+        .time-slot input[type="radio"] {
+            display: none;
+        }
+
+        .time-slot label {
+            display: block;
+            padding: 0.75rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .time-slot input[type="radio"]:checked + label {
+            background: #16a34a;
+            color: white;
+            border-color: #16a34a;
+        }
+
+        .time-slot label:hover {
+            border-color: #16a34a;
+        }
+
+        .time-slot.disabled label {
+            background: #f3f4f6;
+            color: #9ca3af;
+            cursor: not-allowed;
+            border-color: #e5e7eb;
+        }
+
+        .options-list {
+            display: grid;
+            gap: 1rem;
         }
 
         .option-item {
@@ -237,515 +380,619 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             justify-content: space-between;
             padding: 1rem;
             border: 2px solid #e5e7eb;
-            border-radius: 0.5rem;
+            border-radius: 8px;
             cursor: pointer;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
         }
 
         .option-item:hover {
-            border-color: #059669;
+            border-color: #16a34a;
+        }
+
+        .option-item.selected {
+            border-color: #16a34a;
+            background: #f0fdf4;
         }
 
         .option-checkbox {
             display: flex;
             align-items: center;
+            gap: 0.75rem;
         }
 
         .option-checkbox input {
             width: 1.25rem;
             height: 1.25rem;
-            color: #059669;
-            border-radius: 0.25rem;
-            margin-right: 0.75rem;
+            cursor: pointer;
+        }
+
+        .option-name {
+            font-weight: 600;
+            color: #374151;
         }
 
         .option-price {
-            color: #059669;
-            font-weight: 600;
-        }
-
-        .total-options {
-            margin-top: 1rem;
-            padding: 1rem;
-            background-color: #ecfdf5;
-            border-radius: 0.5rem;
-        }
-
-        .total-options p {
-            color: #065f46;
+            color: #16a34a;
             font-weight: 700;
-            font-size: 1.125rem;
         }
 
-        .section-title {
-            display: flex;
-            align-items: center;
-            color: #374151;
-            font-weight: 700;
-            font-size: 1.125rem;
-            margin-bottom: 1rem;
+        .sidebar {
+            position: sticky;
+            top: 100px;
+            height: fit-content;
         }
 
-        .section-title i {
-            color: #059669;
-            margin-right: 0.5rem;
+        .cart {
+            background: white;
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.07);
         }
 
-        .submit-btn {
-            width: 100%;
-            background-color: #059669;
-            color: white;
-            font-weight: 700;
-            padding: 1rem;
-            border: none;
-            border-radius: 0.5rem;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
-
-        .submit-btn:hover {
-            background-color: #047857;
-            transform: scale(1.02);
-        }
-
-        .success-container {
-            min-height: 100vh;
-            background: linear-gradient(135deg, #f0fdf4 0%, #d1fae5 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1rem;
-        }
-
-        .success-card {
-            background-color: white;
-            border-radius: 1rem;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-            padding: 2rem;
-            max-width: 28rem;
-            width: 100%;
-            text-align: center;
-        }
-
-        .success-icon {
-            width: 5rem;
-            height: 5rem;
-            background-color: #dcfce7;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-        }
-
-        .success-icon i {
-            color: #059669;
-            font-size: 2.5rem;
-        }
-
-        .success-title {
-            font-size: 1.5rem;
-            font-weight: 700;
+        .cart-title {
+            font-size: 1.3rem;
             color: #1f2937;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .cart-item:last-child {
+            border-bottom: none;
+        }
+
+        .cart-item-name {
+            color: #6b7280;
+        }
+
+        .cart-item-price {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .cart-total {
+            background: #f0fdf4;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+
+        .cart-total-row {
+            display: flex;
+            justify-content: space-between;
             margin-bottom: 0.5rem;
         }
 
-        .success-message {
-            color: #6b7280;
-            margin-bottom: 1rem;
+        .cart-total-label {
+            font-weight: 600;
+            color: #065f46;
         }
 
-        .success-detail {
-            font-size: 0.875rem;
-            color: #6b7280;
+        .cart-total-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #16a34a;
+        }
+
+        .btn-submit {
+            width: 100%;
+            background: #16a34a;
+            color: white;
+            padding: 1rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 1rem;
+        }
+
+        .btn-submit:hover:not(:disabled) {
+            background: #15803d;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3);
+        }
+
+        .btn-submit:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: static;
+            }
+
+            .criteria-row {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div id="app">
-        <!-- Success message (hidden by default) -->
-        <div id="success-container" class="success-container" style="display: none;">
-            <div class="success-card">
-                <div class="success-icon">
-                    <i class="fas fa-check-square"></i>
+    <header>
+        <nav>
+            <a href="home.php" class="logo">
+                <i class="fas fa-futbol"></i>
+                FootBooking
+            </a>
+            <a href="home.php" class="back-btn">
+                <i class="fas fa-arrow-left"></i>
+                Retour
+            </a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="form-section">
+            <?php if (isset($error)): ?>
+                <div class="alert alert-error">
+                    <?php echo htmlspecialchars($error); ?>
                 </div>
-                <h2 class="success-title">Réservation confirmée !</h2>
-                <p class="success-message" id="success-name">Merci [Prénom] [Nom]</p>
-                <p class="success-detail" id="success-email">Un email de confirmation a été envoyé à [email]</p>
+            <?php endif; ?>
+
+            <!-- Informations utilisateur -->
+            <h3 class="section-title">
+                <i class="fas fa-user"></i>
+                Vos informations
+            </h3>
+            <div class="user-info">
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Nom complet</span>
+                        <span class="info-value">
+                            <?php 
+                            if (isset($user['prenom']) && isset($user['nom'])) {
+                                echo htmlspecialchars($user['prenom'] . ' ' . $user['nom']);
+                            } else {
+                                echo 'Information non disponible';
+                            }
+                            ?>
+                        </span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Email</span>
+                        <span class="info-value">
+                            <?php 
+                            if (isset($user['email'])) {
+                                echo htmlspecialchars($user['email']);
+                            } else {
+                                echo 'Information non disponible';
+                            }
+                            ?>
+                        </span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Téléphone</span>
+                        <span class="info-value">
+                            <?php 
+                            if (isset($user['telephone']) && !empty($user['telephone'])) {
+                                echo htmlspecialchars($user['telephone']);
+                            } else {
+                                echo 'Non renseigné';
+                            }
+                            ?>
+                        </span>
+                    </div>
+                </div>
             </div>
-        </div>
 
-        <!-- Main form -->
-        <div id="main-form">
-            <div class="container">
-                <div class="header">
-                    <h1>Formulaire de Réservation</h1>
-                    <p>Remplissez les informations ci-dessous pour réserver votre terrain.</p>
+            <form method="POST" id="reservationForm">
+                <!-- Critères de recherche -->
+                <h3 class="section-title">
+                    <i class="fas fa-search"></i>
+                    Rechercher un terrain
+                </h3>
+                
+                <div class="criteria-row">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Type de terrain</label>
+                        <select id="searchType" class="form-select">
+                            <option value="">Tous les types</option>
+                            <?php foreach ($types as $type): ?>
+                                <option value="<?php echo htmlspecialchars($type); ?>"><?php echo htmlspecialchars($type); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Taille</label>
+                        <select id="searchTaille" class="form-select">
+                            <option value="">Toutes les tailles</option>
+                            <?php foreach ($tailles as $taille): ?>
+                                <option value="<?php echo htmlspecialchars($taille); ?>"><?php echo htmlspecialchars($taille); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <button type="button" class="btn-search" onclick="searchTerrains()">
+                        <i class="fas fa-search"></i> Rechercher
+                    </button>
                 </div>
 
-                <form id="reservation-form" class="form-container" method="POST" action="">
-                    <div class="form-grid">
-                        <!-- Date de réservation -->
-                        <div class="form-group">
-                            <label class="form-label">
-                                <i class="fas fa-calendar"></i>
-                                Date de réservation
-                            </label>
-                            <input type="date" id="date" name="date" class="form-input">
-                            <p id="date-error" class="error-message" style="display: none;">Date requise</p>
-                        </div>
+                <!-- Liste des terrains -->
+                <div id="terrainsListContainer" style="margin-top: 2rem;">
+                    <div class="terrains-list" id="terrainsList"></div>
+                    <div class="no-results" id="noResults">
+                        <i class="fas fa-info-circle" style="font-size: 3rem; color: #d1d5db; margin-bottom: 1rem;"></i>
+                        <p>Aucun terrain trouvé avec ces critères</p>
+                    </div>
+                </div>
 
-                        <!-- Type de terrain -->
-                        <div class="form-group">
-                            <label class="form-label">
-                                <i class="fas fa-users"></i>
-                                Type de terrain
-                            </label>
-                            <select id="type" name="type" class="form-select">
-                                <option value="">Sélectionnez le type</option>
-                                <option value="Gazon naturel">Gazon naturel</option>
-                                <option value="Gazon artificiel">Gazon artificiel</option>
-                                <option value="Terrain dur">Terrain dur</option>
-                            </select>
-                            <p id="type-error" class="error-message" style="display: none;">Type requis</p>
-                        </div>
+                <!-- Sections cachées jusqu'à la sélection d'un terrain -->
+                <div id="reservationDetails" class="hidden">
+                    <input type="hidden" name="id_terrain" id="selectedTerrainId">
+                    
+                    <!-- Date de réservation -->
+                    <div class="form-group" style="margin-top: 2rem;">
+                        <label class="form-label">
+                            <i class="fas fa-calendar"></i>
+                            Date de réservation
+                        </label>
+                        <input type="date" name="date_reservation" id="dateReservation" class="form-input" 
+                               min="<?php echo date('Y-m-d'); ?>" required>
+                    </div>
 
-                        <!-- Créneau horaire -->
-                        <div class="form-group">
-                            <label class="form-label">
-                                <i class="fas fa-clock"></i>
-                                Créneau horaire
-                            </label>
-                            <select id="creneau" name="creneau" class="form-select">
-                                <option value="">Sélectionnez un créneau</option>
-                                <option value="16h-17h">16h-17h</option>
-                                <option value="17h-18h">17h-18h</option>
-                                <option value="18h-19h">18h-19h</option>
-                                <option value="19h-20h">19h-20h</option>
-                                <option value="20h-21h">20h-21h</option>
-                            </select>
-                            <p id="creneau-error" class="error-message" style="display: none;">Créneau requis</p>
-                        </div>
-
-                        <!-- Taille du terrain -->
-                        <div class="form-group">
-                            <label class="form-label">
-                                <i class="fas fa-expand-alt"></i>
-                                Taille du terrain
-                            </label>
-                            <select id="taille" name="taille" class="form-select">
-                                <option value="">Sélectionnez la taille</option>
-                                <option value="Mini foot">Mini foot</option>
-                                <option value="Terrain moyen">Terrain moyen</option>
-                                <option value="Grand terrain">Grand terrain</option>
-                            </select>
-                            <p id="taille-error" class="error-message" style="display: none;">Taille requise</p>
+                    <!-- Créneaux horaires -->
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="fas fa-clock"></i>
+                            Créneaux horaires disponibles
+                        </label>
+                        <div id="timeSlotsContainer">
+                            <p style="color: #6b7280; text-align: center; padding: 2rem;">
+                                Veuillez sélectionner une date pour voir les créneaux disponibles
+                            </p>
                         </div>
                     </div>
 
                     <!-- Options supplémentaires -->
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-check-square"></i>
-                            Options supplémentaires
-                        </label>
-                        <div class="options-grid">
-                            <div class="option-item" data-option="ballon">
-                                <div class="option-checkbox">
-                                    <input type="checkbox" id="ballon" name="options[]" value="ballon">
-                                    <span>Ballon</span>
-                                </div>
-                                <span class="option-price">50 MAD</span>
-                            </div>
-                            <div class="option-item" data-option="arbitre">
-                                <div class="option-checkbox">
-                                    <input type="checkbox" id="arbitre" name="options[]" value="arbitre">
-                                    <span>Arbitre</span>
-                                </div>
-                                <span class="option-price">200 MAD</span>
-                            </div>
-                            <div class="option-item" data-option="maillots">
-                                <div class="option-checkbox">
-                                    <input type="checkbox" id="maillots" name="options[]" value="maillots">
-                                    <span>Maillots</span>
-                                </div>
-                                <span class="option-price">100 MAD</span>
-                            </div>
-                            <div class="option-item" data-option="douche">
-                                <div class="option-checkbox">
-                                    <input type="checkbox" id="douche" name="options[]" value="douche">
-                                    <span>Douche</span>
-                                </div>
-                                <span class="option-price">30 MAD</span>
-                            </div>
-                        </div>
-                        <div id="total-options" class="total-options" style="display: none;">
-                            <p>Total options: <span id="total-price">0</span> MAD</p>
-                        </div>
-                    </div>
-
-                    <!-- Demande spécifique -->
-                    <div class="form-group">
-                        <label class="form-label">Demande spécifique</label>
-                        <textarea id="demande" name="demande" class="form-textarea" rows="4" placeholder="Écrivez ici vos remarques ou demandes particulières..."></textarea>
-                    </div>
-
-                    <!-- Informations du client -->
+                    <?php if (!empty($options)): ?>
                     <div class="form-group">
                         <h3 class="section-title">
-                            <i class="fas fa-user"></i>
-                            Informations du client
+                            <i class="fas fa-plus-circle"></i>
+                            Options supplémentaires
                         </h3>
-                        <div class="form-grid">
-                            <div class="form-group">
-                                <label class="form-label">Nom</label>
-                                <input type="text" id="nom" name="nom" class="form-input" placeholder="Dupont">
-                                <p id="nom-error" class="error-message" style="display: none;">Nom requis</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label">Prénom</label>
-                                <input type="text" id="prenom" name="prenom" class="form-input" placeholder="Jean">
-                                <p id="prenom-error" class="error-message" style="display: none;">Prénom requis</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label">
-                                    <i class="fas fa-envelope"></i>
-                                    Email
-                                </label>
-                                <input type="email" id="email" name="email" class="form-input" placeholder="jean.dupont@email.com">
-                                <p id="email-error" class="error-message" style="display: none;">Email requis</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label">
-                                    <i class="fas fa-phone"></i>
-                                    Téléphone
-                                </label>
-                                <input type="tel" id="telephone" name="telephone" class="form-input" placeholder="06 12 34 56 78">
-                                <p id="telephone-error" class="error-message" style="display: none;">Téléphone requis</p>
-                            </div>
+                        <div class="options-list">
+                            <?php foreach ($options as $option): ?>
+                                <div class="option-item" onclick="toggleOption(this, <?php echo $option['id_option']; ?>, <?php echo $option['prix']; ?>)">
+                                    <div class="option-checkbox">
+                                        <input type="checkbox" 
+                                               name="options[]" 
+                                               value="<?php echo $option['id_option']; ?>"
+                                               id="option_<?php echo $option['id_option']; ?>"
+                                               data-price="<?php echo $option['prix']; ?>">
+                                        <span class="option-name"><?php echo htmlspecialchars($option['nom_option']); ?></span>
+                                    </div>
+                                    <span class="option-price"><?php echo number_format($option['prix'], 2); ?> DH</span>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
                     </div>
+                    <?php endif; ?>
 
-                    <!-- Bouton de soumission -->
-                    <button type="submit" class="submit-btn">Confirmer la réservation</button>
-                </form>
+                    <!-- Commentaires -->
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="fas fa-comment"></i>
+                            Commentaires (optionnel)
+                        </label>
+                        <textarea name="commentaires" class="form-textarea" rows="4" 
+                                  placeholder="Ajoutez des remarques ou demandes spécifiques..."></textarea>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Sidebar - Panier -->
+        <div class="sidebar">
+            <div class="cart">
+                <h3 class="cart-title">
+                    <i class="fas fa-shopping-cart"></i>
+                    Récapitulatif
+                </h3>
+
+                <div id="cartItems">
+                    <div class="cart-item">
+                        <span class="cart-item-name">Terrain</span>
+                        <span class="cart-item-price" id="terrainPrice">0.00 DH</span>
+                    </div>
+                    <div id="optionsCart"></div>
+                </div>
+
+                <div class="cart-total">
+                    <div class="cart-total-row">
+                        <span class="cart-total-label">Total</span>
+                        <span class="cart-total-value" id="totalPrice">0.00 DH</span>
+                    </div>
+                </div>
+
+                <button type="submit" form="reservationForm" name="submit_reservation" class="btn-submit" id="submitBtn" disabled>
+                    <i class="fas fa-calendar-check"></i>
+                    Confirmer la réservation
+                </button>
             </div>
         </div>
     </div>
 
     <script>
+        let selectedTerrain = null;
+        let selectedOptions = {};
+        let selectedTimeSlot = null;
+        const timeSlots = [];
+
+        // Générer les créneaux horaires (8h à 22h)
+        for (let hour = 8; hour < 22; hour++) {
+            timeSlots.push(`${hour.toString().padStart(2, '0')}:00:00`);
+        }
+
+        // Rechercher les terrains
+        function searchTerrains() {
+            const type = document.getElementById('searchType').value;
+            const taille = document.getElementById('searchTaille').value;
+
+            fetch(`search_terrains.php?type=${encodeURIComponent(type)}&taille=${encodeURIComponent(taille)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Erreur réseau');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    displayTerrains(data);
+                })
+                .catch(error => {
+                    console.error('Erreur:', error);
+                    alert('Erreur lors de la recherche des terrains');
+                });
+        }
+
+        // Afficher les terrains
+        function displayTerrains(terrains) {
+            const container = document.getElementById('terrainsList');
+            const noResults = document.getElementById('noResults');
+
+            if (!terrains || terrains.length === 0) {
+                container.classList.remove('active');
+                noResults.classList.add('active');
+                return;
+            }
+
+            noResults.classList.remove('active');
+            container.classList.add('active');
+
+            let html = '';
+            terrains.forEach(terrain => {
+                html += `
+                    <div class="terrain-card" onclick="selectTerrain(${terrain.id_terrain}, '${terrain.nom_terrain}', ${terrain.prix_heure})">
+                        <input type="radio" name="terrain_radio" value="${terrain.id_terrain}">
+                        <h4>${terrain.nom_terrain}</h4>
+                        <div class="terrain-detail">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span>${terrain.adresse}, ${terrain.ville}</span>
+                        </div>
+                        <div class="terrain-detail">
+                            <i class="fas fa-expand"></i>
+                            <span>${terrain.taille}</span>
+                        </div>
+                        <div class="terrain-detail">
+                            <i class="fas fa-layer-group"></i>
+                            <span>${terrain.type}</span>
+                        </div>
+                        <div class="terrain-price">${parseFloat(terrain.prix_heure).toFixed(2)} DH/h</div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Sélectionner un terrain
+        function selectTerrain(id, nom, prix) {
+            // Retirer la classe selected de tous les cards
+            document.querySelectorAll('.terrain-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+
+            // Ajouter la classe selected au card cliqué
+            event.currentTarget.classList.add('selected');
+
+            // Cocher le radio button
+            event.currentTarget.querySelector('input[type="radio"]').checked = true;
+
+            selectedTerrain = { id, nom, prix };
+            document.getElementById('selectedTerrainId').value = id;
+            document.getElementById('terrainPrice').textContent = parseFloat(prix).toFixed(2) + ' DH';
+
+            // Afficher les détails de réservation
+            document.getElementById('reservationDetails').classList.remove('hidden');
+
+            // Réinitialiser les sélections
+            selectedTimeSlot = null;
+            document.getElementById('timeSlotsContainer').innerHTML = `
+                <p style="color: #6b7280; text-align: center; padding: 2rem;">
+                    Veuillez sélectionner une date pour voir les créneaux disponibles
+                </p>
+            `;
+
+            updateCart();
+            updateSubmitButton();
+        }
+
+        // Charger les créneaux disponibles
         document.addEventListener('DOMContentLoaded', function() {
-            // Variables pour stocker les données du formulaire
-            const formData = {
-                date: '',
-                creneau: '',
-                taille: '',
-                type: '',
-                options: {
-                    ballon: false,
-                    arbitre: false,
-                    maillots: false,
-                    douche: false
-                },
-                demande: '',
-                nom: '',
-                prenom: '',
-                email: '',
-                telephone: ''
-            };
-
-            // Prix des options
-            const optionsPrix = {
-                ballon: 50,
-                arbitre: 200,
-                maillots: 100,
-                douche: 30
-            };
-
-            // Éléments du DOM
-            const mainForm = document.getElementById('main-form');
-            const successContainer = document.getElementById('success-container');
-            const reservationForm = document.getElementById('reservation-form');
-            const totalOptions = document.getElementById('total-options');
-            const totalPrice = document.getElementById('total-price');
-            const successName = document.getElementById('success-name');
-            const successEmail = document.getElementById('success-email');
-
-            // Gestion des changements d'input
-            document.querySelectorAll('input, select, textarea').forEach(element => {
-                element.addEventListener('input', function() {
-                    const name = this.name || this.id;
-                    const value = this.type === 'checkbox' ? this.checked : this.value;
+            const dateInput = document.getElementById('dateReservation');
+            if (dateInput) {
+                dateInput.addEventListener('change', function() {
+                    const date = this.value;
+                    const terrainId = document.getElementById('selectedTerrainId').value;
                     
-                    if (name in formData.options) {
-                        formData.options[name] = value;
-                        updateTotal();
-                    } else {
-                        formData[name] = value;
-                    }
-                    
-                    // Effacer l'erreur si le champ est rempli
-                    if (value) {
-                        hideError(name);
+                    if (date && terrainId) {
+                        loadAvailableSlots(terrainId, date);
                     }
                 });
+            }
+        });
+
+        function loadAvailableSlots(terrainId, date) {
+            fetch(`get_available_slots.php?terrain_id=${terrainId}&date=${date}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Erreur réseau');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    displayTimeSlots(data.booked_slots || []);
+                    selectedTimeSlot = null;
+                    updateSubmitButton();
+                })
+                .catch(error => {
+                    console.error('Erreur:', error);
+                    displayTimeSlots([]);
+                });
+        }
+
+        function displayTimeSlots(bookedSlots) {
+            const container = document.getElementById('timeSlotsContainer');
+            let html = '<div class="time-slots">';
+
+            timeSlots.forEach(slot => {
+                const isBooked = bookedSlots.includes(slot);
+                const [hour] = slot.split(':');
+                const displayTime = `${hour}h-${parseInt(hour) + 1}h`;
+
+                html += `
+                    <div class="time-slot ${isBooked ? 'disabled' : ''}">
+                        <input type="radio" 
+                               name="heure_debut" 
+                               value="${slot}" 
+                               id="slot_${slot}" 
+                               ${isBooked ? 'disabled' : ''}
+                               onchange="selectTimeSlot(this)">
+                        <label for="slot_${slot}">${displayTime}</label>
+                    </div>
+                `;
             });
 
-            // Gestion des clics sur les options
-            document.querySelectorAll('.option-item').forEach(item => {
-                item.addEventListener('click', function() {
-                    const option = this.getAttribute('data-option');
-                    const checkbox = document.getElementById(option);
-                    checkbox.checked = !checkbox.checked;
-                    formData.options[option] = checkbox.checked;
-                    updateTotal();
-                });
-            });
+            html += '</div>';
+            container.innerHTML = html;
+        }
 
-            // Mise à jour du total des options
-            function updateTotal() {
-                let total = 0;
-                for (const option in formData.options) {
-                    if (formData.options[option]) {
-                        total += optionsPrix[option];
-                    }
-                }
-                
-                if (total > 0) {
-                    totalPrice.textContent = total;
-                    totalOptions.style.display = 'block';
-                } else {
-                    totalOptions.style.display = 'none';
-                }
+        function selectTimeSlot(radio) {
+            selectedTimeSlot = radio;
+            updateSubmitButton();
+        }
+
+        function toggleOption(element, optionId, price) {
+            const checkbox = element.querySelector('input[type="checkbox"]');
+            checkbox.checked = !checkbox.checked;
+
+            if (checkbox.checked) {
+                selectedOptions[optionId] = {
+                    price: price,
+                    name: element.querySelector('.option-name').textContent
+                };
+                element.classList.add('selected');
+            } else {
+                delete selectedOptions[optionId];
+                element.classList.remove('selected');
             }
 
-            // Validation du formulaire
-            function validateForm() {
-                let isValid = true;
-                
-                // Réinitialiser les erreurs
-                document.querySelectorAll('.error-message').forEach(error => {
-                    error.style.display = 'none';
-                });
-                document.querySelectorAll('.form-input, .form-select').forEach(input => {
-                    input.classList.remove('error');
-                });
-                
-                // Validation des champs requis
-                if (!formData.date) {
-                    showError('date', 'Date requise');
-                    isValid = false;
-                }
-                
-                if (!formData.creneau) {
-                    showError('creneau', 'Créneau requis');
-                    isValid = false;
-                }
-                
-                if (!formData.taille) {
-                    showError('taille', 'Taille requise');
-                    isValid = false;
-                }
-                
-                if (!formData.type) {
-                    showError('type', 'Type requis');
-                    isValid = false;
-                }
-                
-                if (!formData.nom) {
-                    showError('nom', 'Nom requis');
-                    isValid = false;
-                }
-                
-                if (!formData.prenom) {
-                    showError('prenom', 'Prénom requis');
-                    isValid = false;
-                }
-                
-                if (!formData.email) {
-                    showError('email', 'Email requis');
-                    isValid = false;
-                } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-                    showError('email', 'Email invalide');
-                    isValid = false;
-                }
-                
-                if (!formData.telephone) {
-                    showError('telephone', 'Téléphone requis');
-                    isValid = false;
-                }
-                
-                return isValid;
+            updateCart();
+        }
+
+        function updateCart() {
+            const optionsCart = document.getElementById('optionsCart');
+            let html = '';
+            let optionsTotal = 0;
+
+            // Mettre à jour les options dans le panier
+            for (const [optionId, option] of Object.entries(selectedOptions)) {
+                optionsTotal += parseFloat(option.price);
+
+                html += `
+                    <div class="cart-item">
+                        <span class="cart-item-name">${option.name}</span>
+                        <span class="cart-item-price">${parseFloat(option.price).toFixed(2)} DH</span>
+                    </div>
+                `;
             }
 
-            // Afficher une erreur
-            function showError(field, message) {
-                const errorElement = document.getElementById(field + '-error');
-                const inputElement = document.getElementById(field);
-                
-                if (errorElement) {
-                    errorElement.textContent = message;
-                    errorElement.style.display = 'block';
-                }
-                
-                if (inputElement) {
-                    inputElement.classList.add('error');
-                }
+            optionsCart.innerHTML = html;
+
+            // Calculer le total
+            const terrainPrice = selectedTerrain ? selectedTerrain.prix : 0;
+            const total = terrainPrice + optionsTotal;
+            document.getElementById('totalPrice').textContent = total.toFixed(2) + ' DH';
+        }
+
+        function updateSubmitButton() {
+            const submitBtn = document.getElementById('submitBtn');
+            const dateSelected = document.getElementById('dateReservation').value;
+
+            if (selectedTerrain && dateSelected && selectedTimeSlot) {
+                submitBtn.disabled = false;
+            } else {
+                submitBtn.disabled = true;
+            }
+        }
+
+        // Validation du formulaire
+        document.getElementById('reservationForm').addEventListener('submit', function(e) {
+            if (!selectedTerrain) {
+                e.preventDefault();
+                alert('Veuillez sélectionner un terrain');
+                return;
             }
 
-            // Cacher une erreur
-            function hideError(field) {
-                const errorElement = document.getElementById(field + '-error');
-                const inputElement = document.getElementById(field);
-                
-                if (errorElement) {
-                    errorElement.style.display = 'none';
-                }
-                
-                if (inputElement) {
-                    inputElement.classList.remove('error');
-                }
+            const dateSelected = document.getElementById('dateReservation').value;
+            if (!dateSelected) {
+                e.preventDefault();
+                alert('Veuillez sélectionner une date');
+                return;
             }
 
-            // // Soumission du formulaire
-            // reservationForm.addEventListener('submit', function(e) {
-            //     e.preventDefault();
-                
-            //     if (validateForm()) {
-            //         // Afficher le message de succès
-            //         successName.textContent = Merci ${formData.prenom} ${formData.nom};
-            //         successEmail.textContent = Un email de confirmation a été envoyé à ${formData.email};
-                    
-            //         mainForm.style.display = 'none';
-            //         successContainer.style.display = 'flex';
-                    
-            //         // Réinitialiser le formulaire après 3 secondes
-            //         setTimeout(() => {
-            //             successContainer.style.display = 'none';
-            //             mainForm.style.display = 'block';
-            //             reservationForm.reset();
-                        
-            //             // Réinitialiser formData
-            //             for (const key in formData) {
-            //                 if (key === 'options') {
-            //                     for (const option in formData.options) {
-            //                         formData.options[option] = false;
-            //                     }
-            //                 } else {
-            //                     formData[key] = '';
-            //                 }
-            //             }
-                        
-            //             // Cacher le total des options
-            //             totalOptions.style.display = 'none';
-            //         }, 3000);
-            //     }
-            // });
+            if (!selectedTimeSlot) {
+                e.preventDefault();
+                alert('Veuillez sélectionner un créneau horaire');
+                return;
+            }
+        });
+
+        // Initialiser
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCart();
+            updateSubmitButton();
         });
     </script>
 </body>

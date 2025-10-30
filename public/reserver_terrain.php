@@ -1,3 +1,4 @@
+
 <?php
 session_start();
 require_once '../config/database.php';
@@ -477,16 +478,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
     <header>
-        <nav>
-            <a href="home.php" class="logo">
-                <i class="fas fa-futbol"></i>
-                FootBooking
-            </a>
-            <a href="terrains.php" class="back-btn">
-                <i class="fas fa-arrow-left"></i>
-                Retour aux terrains
-            </a>
-        </nav>
+<?php include '../includes/navbar.php'; ?>
     </header>
 
     <div class="container">
@@ -905,6 +897,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateCart();
         updateSubmitButton();
     });
+     <?php include '../includes/footer.php'; ?>
 </script>
 </body>
 </html>

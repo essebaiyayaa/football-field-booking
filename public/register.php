@@ -111,7 +111,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 0;
             box-sizing: border-box;
         }
+/* Menu utilisateur */
+.user-menu {
+    position: relative;
+}
 
+.user-button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    background: #16a34a;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.user-button:hover {
+    background: #15803d;
+}
+
+.user-button i.fa-user-circle {
+    font-size: 1.5rem;
+}
+
+.user-button i.fa-chevron-down {
+    font-size: 0.8rem;
+    transition: transform 0.3s;
+}
+
+.user-button:hover i.fa-chevron-down {
+    transform: rotate(180deg);
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.5rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    min-width: 220px;
+    display: none;
+    z-index: 1000;
+}
+
+.dropdown-menu.show {
+    display: block;
+    animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.dropdown-menu a {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    color: #374151;
+    text-decoration: none;
+    transition: background 0.2s;
+}
+
+.dropdown-menu a:hover {
+    background: #f3f4f6;
+}
+
+.dropdown-menu a.logout {
+    color: #dc2626;
+}
+
+.dropdown-menu a.logout:hover {
+    background: #fee2e2;
+}
+
+.dropdown-menu hr {
+    margin: 0.5rem 0;
+    border: none;
+    border-top: 1px solid #e5e7eb;
+}
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
@@ -412,6 +503,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 eye.classList.add('fa-eye');
             }
         }
+        function toggleUserMenu() {
+    const dropdown = document.getElementById('userDropdown');
+    dropdown.classList.toggle('show');
+}
+
+// Fermer le menu si on clique en dehors
+document.addEventListener('click', function(event) {
+    const userMenu = document.querySelector('.user-menu');
+    if (userMenu && !userMenu.contains(event.target)) {
+        const dropdown = document.getElementById('userDropdown');
+        if (dropdown) {
+            dropdown.classList.remove('show');
+        }
+    }
+});
     </script>
 </body>
 </html>

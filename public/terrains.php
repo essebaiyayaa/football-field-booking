@@ -433,7 +433,7 @@ try {
     <!-- Hero Section -->
     <section class="hero">
         <h1><i class="fas fa-futbol"></i> Nos Terrains</h1>
-        <p>Découvrez nos terrains de football disponibles à Casablanca</p>
+        <p>Découvrez nos terrains de football disponibles </p>
     </section>
 
     <!-- Filters Section -->
