@@ -29,20 +29,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     exit;
 }
 
-/**
- * Fonction pour générer un mot de passe aléatoire sécurisé
- * 
- * @param int $length Longueur du mot de passe
- * @return string Mot de passe généré
- */
-function genererMotDePasse($length = 12) {
-    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*';
-    $password = '';
-    for ($i = 0; $i < $length; $i++) {
-        $password .= $chars[random_int(0, strlen($chars) - 1)];
-    }
-    return $password;
-}
+
 
 /**
  * Fonction pour envoyer un email avec les identifiants
