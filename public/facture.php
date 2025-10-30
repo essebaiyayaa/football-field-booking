@@ -13,7 +13,7 @@ if (!isset($_SESSION['user_id'])) {
 $id_reservation = $_GET['id'] ?? null;
 
 if (!$id_reservation) {
-    header('Location: mes_reservations.php');
+    header('Location: mes-reservations.php');
     exit;
 }
 
@@ -31,7 +31,7 @@ try {
     $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$reservation) {
-        header('Location: mes_reservations.php');
+        header('Location: mes-reservations.php');
         exit;
     }
 } catch (PDOException $e) {
@@ -555,7 +555,7 @@ function generateInvoiceHTML($reservation, $options, $total_options, $total_gene
                 <i class="fas fa-futbol"></i>
                 FootBooking
             </a>
-            <a href="mes_reservations.php" class="back-btn">
+            <a href="mes-reservations.php" class="back-btn">
                 <i class="fas fa-arrow-left"></i>
                 Mes réservations
             </a>
@@ -728,7 +728,7 @@ function generateInvoiceHTML($reservation, $options, $total_options, $total_gene
                         Télécharger la facture (PDF)
                     </button>
                 </form>
-                <a href="mes_reservations.php" class="btn btn-secondary">
+                <a href="mes-reservations.php" class="btn btn-secondary">
                     <i class="fas fa-list"></i>
                     Mes réservations
                 </a>
